@@ -2,6 +2,7 @@ let currentSong = new Audio();
 let songs = [];
 let currFolder = "";
 let currentSongIndex = 0;
+let songsData = {}; // Store the loaded songs JSON
 
 function secondsToMinutesSeconds(seconds) {
     if (isNaN(seconds) || seconds < 0) return "00:00";
@@ -10,25 +11,24 @@ function secondsToMinutesSeconds(seconds) {
     return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+async function loadSongsData() {
+    if (Object.keys(songsData).length === 0) {
+        let response = await fetch('/songs/songs.json');
+        songsData = await response.json();
+    }
+}
+
 async function getSongs(folder) {
     currFolder = folder;
-    let a = await fetch(`songs/${folder}/info.json`);
-    let response = await a.text();
-    let div = document.createElement("div");
-    div.innerHTML = response;
-    let as = div.getElementsByTagName("a");
-    let songList = [];
+    await loadSongsData();
 
-    for (let index = 0; index < as.length; index++) {
-        const element = as[index];
-        if (element.href.endsWith(".mp3")) {
-            let url = decodeURIComponent(element.href);
-            url = url.replace(/\\/g, '/');
-            let filename = url.split('/').pop();
-            songList.push(filename.split('?')[0]);
-        }
+    // Extract folder name from path (e.g. "songs/NFAK" -> "NFAK")
+    let folderName = folder.split('/').pop();
+
+    if (songsData[folderName]) {
+        return songsData[folderName];
     }
-    return songList;
+    return [];
 }
 
 function playSongByIndex(index) {
@@ -74,56 +74,33 @@ function updateSongsList() {
 
 async function displayAlbums() {
     try {
-        let a = await fetch('songs/')
-        if (!a.ok) return;
-        
-        let response = await a.text();
-        let div = document.createElement("div")
-        div.innerHTML = response;
-        let anchors = div.getElementsByTagName("a")
-        let cardContainer = document.querySelector(".cardContainer")
-
+        await loadSongsData();
+        let cardContainer = document.querySelector(".cardContainer");
         cardContainer.innerHTML = "";
 
-        for (let i = 0; i < anchors.length; i++) {
-            const e = anchors[i];
-            let decodedHref = decodeURIComponent(e.href);
+        for (const folder of Object.keys(songsData)) {
+            try {
+                let metadataResponse = await fetch(`/songs/${folder}/info.json`);
+                if (!metadataResponse.ok) continue;
 
-            if ((decodedHref.includes("/songs/") || decodedHref.includes("\\songs\\")) &&
-                !decodedHref.includes(".htaccess")) {
+                let metadata = await metadataResponse.json();
 
-                let folder;
-                if (decodedHref.includes("\\songs\\")) {
-                    let parts = decodedHref.split('\\');
-                    folder = parts[parts.length - 1].replace('/', '');
-                } else {
-                    let parts = decodedHref.split('/');
-                    folder = parts[parts.length - 2] || parts[parts.length - 1].replace('/', '');
-                }
+                cardContainer.innerHTML += ` 
+                <div data-folder="${folder}" class="card">
+                    <div class="play">
+                        <svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="24" cy="24" r="24" fill="#1DB954"/>
+                            <path d="M31.5 24C31.5 24.828 30.866 25.5 30.066 25.5L19.934 25.5C19.134 25.5 18.5 24.828 18.5 24C18.5 23.172 19.134 22.5 19.934 22.5L30.066 22.5C30.866 22.5 31.5 23.172 31.5 24Z" fill="black"/>
+                            <path d="M30.366 24L20.134 30.696C19.434 31.152 18.5 30.624 18.5 29.796L18.5 18.204C18.5 17.376 19.434 16.848 20.134 17.304L30.366 24Z" fill="black"/>
+                        </svg>
+                    </div>
+                    <img src="/songs/${folder}/cover.jpg" alt="${metadata.title}">
+                    <h2>${metadata.title}</h2>
+                    <p>${metadata.description}</p>
+                </div>`;
 
-                try {
-                    let metadataResponse = await fetch(`songs/${folder}/info.json`)
-                    if (!metadataResponse.ok) continue;
-                    
-                    let metadata = await metadataResponse.json();
-
-                    cardContainer.innerHTML += ` 
-                    <div data-folder="${folder}" class="card">
-                        <div class="play">
-                            <svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-                                <circle cx="24" cy="24" r="24" fill="#1DB954"/>
-                                <path d="M31.5 24C31.5 24.828 30.866 25.5 30.066 25.5L19.934 25.5C19.134 25.5 18.5 24.828 18.5 24C18.5 23.172 19.134 22.5 19.934 22.5L30.066 22.5C30.866 22.5 31.5 23.172 31.5 24Z" fill="black"/>
-                                <path d="M30.366 24L20.134 30.696C19.434 31.152 18.5 30.624 18.5 29.796L18.5 18.204C18.5 17.376 19.434 16.848 20.134 17.304L30.366 24Z" fill="black"/>
-                            </svg>
-                        </div>
-                        <img src="/songs/${folder}/cover.jpg" alt="${metadata.title}">
-                        <h2>${metadata.title}</h2>
-                        <p>${metadata.description}</p>
-                    </div>`;
-
-                } catch (error) {
-                    console.error(`Error loading ${folder}:`, error);
-                }
+            } catch (error) {
+                console.error(`Error loading ${folder}:`, error);
             }
         }
     } catch (error) {
@@ -133,7 +110,16 @@ async function displayAlbums() {
 
 async function main() {
     await displayAlbums();
-    songs = await getSongs("songs/NFAK");
+
+    // Initialize with the first album found in JSON or default if available
+    // For now we'll try to load "NFAK" if it exists, or the first key
+    await loadSongsData();
+    let firstFolder = Object.keys(songsData)[0];
+
+    if (firstFolder) {
+        songs = await getSongs(`songs/${firstFolder}`);
+        currFolder = `songs/${firstFolder}`; // Ensure currFolder is set correctly
+    }
 
     if (songs.length > 0) {
         currentSong.src = `/${currFolder}/${songs[0]}`;
@@ -146,10 +132,11 @@ async function main() {
     // Load the library when card is clicked
     Array.from(document.getElementsByClassName("card")).forEach(e => {
         e.addEventListener("click", async item => {
-            songs = await getSongs(`songs/${item.currentTarget.dataset.folder}`);
+            let folder = item.currentTarget.dataset.folder;
+            songs = await getSongs(`songs/${folder}`);
             updateSongsList();
-            
-            // CHANGED: Play the first song when clicking an album
+
+            // Play the first song when clicking an album
             if (songs.length > 0) {
                 playSongByIndex(0);
             }
